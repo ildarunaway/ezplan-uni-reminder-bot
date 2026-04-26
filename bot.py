@@ -560,15 +560,6 @@ def save_task_time_individual(message, user_id, chat_id):
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("fast_time_"))
-
-    for task_info in tasks:
-        cursor.execute('''
-            INSERT INTO tasks (user_id, subject_id, title, task_type, due_date, due_time)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, subject_id, task_info['title'], task_type, due_date, due_time))
-        saved.append(task_info['title'])
-    
-    conn.commit()
     
     time_text = f" ⏰ {due_time}" if due_time else ""
     bot.send_message(chat_id, 
