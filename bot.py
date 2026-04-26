@@ -152,17 +152,16 @@ def get_main_keyboard():
 def start(message):
     get_or_create_user(message.from_user.id, message.from_user.username,
                       message.from_user.first_name, message.from_user.last_name)
+    
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        types.InlineKeyboardButton("🎓 НАЧАТЬ", callback_data="menu_subjects")
+    )
+    
     bot.send_message(message.chat.id,
-        f"🎓 ПРИВЕТ, {message.from_user.first_name.upper()}!\n\n"
-        f"Я — твой умный помощник по учёбе. Вот что я умею:\n\n"
-        f"📚 **Мои предметы** — список всех предметов с активными задачами\n"
-        f"➕ **Быстрое добавление** — пакетное создание работ (до 5 за раз)\n"
-        f"📅 **Умный календарь** — просмотр по месяцам и неделям\n"
-        f"🔔 **Умные напоминания** — группировка уведомлений, настройка времени\n"
-        f"⚙️ **Настройки** — часовой пояс, время дайджеста, тихие часы\n"
-        f"📊 **Статистика** — успеваемость по предметам и типам работ\n\n"
-        f"Начни с добавления первого предмета! 👇",
-        reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        f"🎓 привет, {message.from_user.first_name.upper()}!\n\n"
+        f"я — твой умный помощник по учёбе. нажимай на кнопку ниже, чтобы начать! 👇",
+        reply_markup=keyboard, parse_mode="Markdown")
 
 @bot.message_handler(commands=['today'])
 def today(message):
@@ -494,6 +493,11 @@ def save_task_title(message, user_id, chat_id):
     bot.register_next_step_handler(msg, save_task_date_individual, user_id, chat_id)
 
 def save_all_tasks(user_id, chat_id):
+    data = user_temp.get(user_id, {})
+    tasks = data.get('tasks', [])
+    subject_id = data.get('subject_id')
+    task_type = data.get('task_type')
+    
     saved = []
     for task_info in tasks:
         due_date = task_info.get('due_date')
@@ -525,7 +529,10 @@ def save_task_date_individual(message, user_id, chat_id):
     try:
         due_date = parse_date(message.text.strip())
     except:
-        bot.send_message(chat_id, "❌ Неверный формат! Используйте ДД.ММ.ГГГГ")
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        keyboard.add(types.InlineKeyboardButton("🔄 ПОПРОБОВАТЬ ЕЩЕ", callback_data="menu_add"))
+        keyboard.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_subjects"))
+        bot.send_message(chat_id, "❌ Неверный формат! Используйте ДД.ММ.ГГГГ", reply_markup=keyboard, parse_mode="Markdown")
         return
     
     data = user_temp.get(user_id, {})
@@ -554,21 +561,6 @@ def save_task_time_individual(message, user_id, chat_id):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("fast_time_"))
 
-def save_with_time(message, user_id, chat_id):
-    time_str = message.text.strip()
-    if not (len(time_str) == 5 and time_str[2] == ':' and time_str[:2].isdigit() and time_str[3:].isdigit()):
-        bot.send_message(chat_id, "❌ Неверный формат! Используйте ЧЧ:ММ")
-        return
-    save_final_tasks(user_id, chat_id, time_str)
-
-def save_final_tasks(user_id, chat_id, due_time):
-    data = user_temp.get(user_id, {})
-    due_date = data.get('due_date')
-    tasks = data.get('tasks_list', [])
-    subject_id = data.get('subject_id_final')
-    task_type = data.get('task_type_final')
-    
-    saved = []
     for task_info in tasks:
         cursor.execute('''
             INSERT INTO tasks (user_id, subject_id, title, task_type, due_date, due_time)
