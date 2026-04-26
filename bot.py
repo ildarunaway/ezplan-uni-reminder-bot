@@ -12,6 +12,7 @@ import logging
 TOKEN = os.getenv('BOT_TOKEN')
 print("ENV:", dict(os.environ))
 print(f"DEBUG: token exists: {bool(os.getenv('BOT_TOKEN'))}")
+print("ENV BOT_TOKEN:", os.getenv("BOT_TOKEN"))
 if not TOKEN:
     print("Ошибка: переменная BOT_TOKEN не установлена!")
     exit(1)
