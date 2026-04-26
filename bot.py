@@ -557,20 +557,6 @@ def save_task_time_individual(message, user_id, chat_id):
     # Продолжить со следующей работы
     ask_task_title(user_id, chat_id)
 
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("fast_time_"))
-    
-    time_text = f" ⏰ {due_time}" if due_time else ""
-    bot.send_message(chat_id, 
-        f"✅ **Добавлено {len(saved)} работ(а)!**\n\n"
-        f"📌 {', '.join(saved)}\n"
-        f"📅 {format_date(due_date)}{time_text}",
-        reply_markup=get_main_keyboard(), parse_mode="Markdown")
-    
-    if user_id in user_temp:
-        del user_temp[user_id]
-
 # ========== ПРОСРОЧЕННЫЕ (СЦЕНАРИЙ Б) ==========
 def show_overdue_tasks(user_id, chat_id):
     today = datetime.now().strftime("%Y-%m-%d")
