@@ -175,6 +175,8 @@ def today(message):
     ''', (message.from_user.id, today_str))
     tasks = cursor.fetchall()
     
+    tasks = [t for t in tasks if t[0] is not None]  # Отфильтруй NULL-строки
+    
     if not tasks:
         bot.send_message(message.chat.id, "📅 НА СЕГОДНЯ\n\nНет запланированных работ. Отдыхайте! 🎉")
         return
@@ -195,6 +197,8 @@ def tomorrow(message):
         WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending'
     ''', (message.from_user.id, tomorrow_str))
     tasks = cursor.fetchall()
+
+    tasks = [t for t in tasks if t[0] is not None]
     
     if not tasks:
         bot.send_message(message.chat.id, f"📅 НА ЗАВТРА ({(datetime.now() + timedelta(days=1)).strftime('%d.%m.%Y')})\n\nНет запланированных работ.")
@@ -217,6 +221,8 @@ def week(message):
         ORDER BY t.due_date
     ''', (message.from_user.id, today.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")))
     tasks = cursor.fetchall()
+
+    tasks = [t for t in tasks if t[0] is not None]
     
     if not tasks:
         bot.send_message(message.chat.id, "📅 НА ЭТУ НЕДЕЛЮ\n\nНет запланированных работ.")
@@ -315,6 +321,8 @@ def show_subject_details(call):
         ORDER BY t.due_date
     ''', (call.from_user.id, subject_id))
     tasks = cursor.fetchall()
+
+    tasks = [t for t in tasks if t[0] is not None]
     
     upcoming = []
     overdue = []
@@ -365,12 +373,15 @@ def show_subject_details(call):
     
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
                          reply_markup=keyboard, parse_mode="Markdown")
+    
+    bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "add_subject")
 def add_subject_prompt(call):
-    msg = bot.send_message(call.message.chat.id, "📝 **Введите название предмета:**\n\nНапример: Математика, Физика, Программирование", parse_mode="Markdown")
+    msg = bot.send_message(call.message.chat.id, 
+                           "📝 **Введите название предмета:**\n\nНапример: Математика, Физика, Программирование",
+                           parse_mode="Markdown")
     bot.register_next_step_handler(msg, save_subject, call.message.chat.id)
-
 def save_subject(message, chat_id):
     subject_name = message.text.strip()
     if len(subject_name) > 50:
@@ -380,10 +391,17 @@ def save_subject(message, chat_id):
     try:
         cursor.execute("INSERT INTO subjects (user_id, name) VALUES (?, ?)", (message.from_user.id, subject_name))
         conn.commit()
-        bot.send_message(chat_id, f"✅ Предмет **{subject_name}** добавлен!", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        keyboard.add(types.InlineKeyboardButton("📚 К ПРЕДМЕТАМ", callback_data="menu_subjects"))
+        keyboard.add(types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
+        bot.send_message(chat_id, f"✅ Предмет **{subject_name}** добавлен!", 
+                        reply_markup=keyboard, parse_mode="Markdown")
     except sqlite3.IntegrityError:
-        bot.send_message(chat_id, f"❌ Предмет **{subject_name}** уже существует!", parse_mode="Markdown")
-
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        keyboard.add(types.InlineKeyboardButton("🔄 ПОПРОБОВАТЬ ЕЩЕ", callback_data="add_subject"))
+        keyboard.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_subjects"))
+        bot.send_message(chat_id, f"❌ Предмет **{subject_name}** уже существует!", 
+                        reply_markup=keyboard, parse_mode="Markdown")
 # ========== БЫСТРОЕ ДОБАВЛЕНИЕ (ПАКЕТНЫЙ РЕЖИМ) ==========
 user_temp = {}
 
@@ -472,44 +490,69 @@ def save_task_title(message, user_id, chat_id):
     data['tasks'].append({'title': message.text.strip()})
     user_temp[user_id] = data
     
-    ask_task_title(user_id, chat_id)
+    msg = bot.send_message(chat_id, "📅 **Введите дату сдачи**\n\nФормат: ДД.ММ.ГГГГ", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, save_task_date_individual, user_id, chat_id)
 
 def save_all_tasks(user_id, chat_id):
-    data = user_temp.get(user_id, {})
-    tasks = data.get('tasks', [])
-    subject_id = data.get('subject_id')
-    task_type = data.get('task_type')
+    saved = []
+    for task_info in tasks:
+        due_date = task_info.get('due_date')
+        due_time = task_info.get('due_time')
+        
+        cursor.execute('''
+            INSERT INTO tasks (user_id, subject_id, title, task_type, due_date, due_time)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, subject_id, task_info['title'], task_type, due_date, due_time))
+        saved.append(task_info['title'])
     
-    msg = bot.send_message(chat_id, "📅 **Введите дату сдачи для ВСЕХ работ**\n\nФормат: ДД.ММ.ГГГГ (например: 25.05.2025)", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, save_task_date, user_id, chat_id, tasks, subject_id, task_type)
+    conn.commit()
+    
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    keyboard.add(types.InlineKeyboardButton("➕ ДОБАВИТЬ ЕЩЕ", callback_data="menu_add"))
+    keyboard.add(types.InlineKeyboardButton("📚 К ПРЕДМЕТАМ", callback_data="menu_subjects"))
+    keyboard.add(types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
+    
+    task_list = '\n'.join([f"  • {t}" for t in saved])
+    bot.send_message(chat_id, 
+        f"✅ **Добавлено {len(saved)} работ(а)!**\n\n"
+        f"{task_list}",
+        reply_markup=keyboard, parse_mode="Markdown")
+    
+    if user_id in user_temp:
+        del user_temp[user_id]
 
-def save_task_date(message, user_id, chat_id, tasks, subject_id, task_type):
+def save_task_date_individual(message, user_id, chat_id):
     try:
         due_date = parse_date(message.text.strip())
     except:
         bot.send_message(chat_id, "❌ Неверный формат! Используйте ДД.ММ.ГГГГ")
         return
     
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        types.InlineKeyboardButton("✅ ДА", callback_data="fast_time_yes"),
-        types.InlineKeyboardButton("❌ НЕТ", callback_data="fast_time_no")
-    )
+    data = user_temp.get(user_id, {})
+    task_index = data.get('current', 1) - 1
+    data['tasks'][task_index]['due_date'] = due_date
+    user_temp[user_id] = data
     
-    user_temp[user_id]['due_date'] = due_date
-    user_temp[user_id]['tasks_list'] = tasks
-    user_temp[user_id]['subject_id_final'] = subject_id
-    user_temp[user_id]['task_type_final'] = task_type
+    # Продолжить со следующей работы
+    ask_task_title(user_id, chat_id)
+
+def save_task_time_individual(message, user_id, chat_id):
+    time_str = message.text.strip()
+    if not (len(time_str) == 5 and time_str[2] == ':' and time_str[:2].isdigit() and time_str[3:].isdigit()):
+        bot.send_message(chat_id, "❌ Неверный формат! Используйте ЧЧ:ММ")
+        return
     
-    bot.send_message(chat_id, "⏰ **Указать время сдачи?**", reply_markup=keyboard, parse_mode="Markdown")
+    data = user_temp.get(user_id, {})
+    task_index = data.get('current', 1) - 1
+    data['tasks'][task_index]['due_time'] = time_str
+    user_temp[user_id] = data
+    
+    # Продолжить со следующей работы
+    ask_task_title(user_id, chat_id)
+
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("fast_time_"))
-def fast_time_option(call):
-    if call.data == "fast_time_yes":
-        msg = bot.send_message(call.message.chat.id, "⏰ **Введите время в формате ЧЧ:ММ**\n\nНапример: 14:30", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, save_with_time, call.from_user.id, call.message.chat.id)
-    else:
-        save_final_tasks(call.from_user.id, call.message.chat.id, None)
 
 def save_with_time(message, user_id, chat_id):
     time_str = message.text.strip()
@@ -673,6 +716,8 @@ def calendar_week(call):
         ORDER BY t.due_date
     ''', (call.from_user.id, today.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")))
     tasks = cursor.fetchall()
+
+    tasks = [t for t in tasks if t[0] is not None]
     
     if not tasks:
         bot.edit_message_text("📋 **НА ЭТУ НЕДЕЛЮ**\n\nНет запланированных работ.",
