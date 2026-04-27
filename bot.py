@@ -65,8 +65,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 CREATE TABLE IF NOT EXISTS reminder_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id INTEGER,
     user_id INTEGER,
+    task_id INTEGER,
     notify_date DATE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -108,24 +108,19 @@ def get_or_create_user(user_id, username=None, first_name=None, last_name=None):
         conn.commit()
 
 def format_date(date_str):
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
-    except:
-        return date_str
+    try: return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except: return date_str
 
 def parse_date(date_str):
     return datetime.strptime(date_str.strip(), "%d.%m.%Y").strftime("%Y-%m-%d")
 
 def safe_edit(call, text, reply_markup=None, parse_mode="Markdown"):
-    try:
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=reply_markup, parse_mode=parse_mode)
-    except:
-        bot.send_message(call.message.chat.id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=reply_markup, parse_mode=parse_mode)
+    except: bot.send_message(call.message.chat.id, text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 def nav_buttons(section_callback="back_to_menu"):
     kb = types.InlineKeyboardMarkup(row_width=2)
-    if section_callback:
-        kb.add(types.InlineKeyboardButton("◀️ В РАЗДЕЛ", callback_data=section_callback))
+    if section_callback: kb.add(types.InlineKeyboardButton("◀️ В РАЗДЕЛ", callback_data=section_callback))
     kb.add(types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
     return kb
 
@@ -188,8 +183,7 @@ def show_subjects(call):
         return safe_edit(call, "📚 У вас пока нет предметов.\nДобавьте первый, чтобы начать!", 
                          types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("➕ ДОБАВИТЬ", callback_data="add_subject"), types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu")))
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for s in subs:
-        kb.add(types.InlineKeyboardButton(f"{s['emoji']} {s['name']}", callback_data=f"subject_{s['id']}"))
+    for s in subs: kb.add(types.InlineKeyboardButton(f"{s['emoji']} {s['name']}", callback_data=f"subject_{s['id']}"))
     kb.add(types.InlineKeyboardButton("➕ НОВЫЙ ПРЕДМЕТ", callback_data="add_subject"),
            types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu"))
     safe_edit(call, "📚 ВАШИ ПРЕДМЕТЫ", kb)
@@ -393,7 +387,7 @@ def calendar_handler(call):
         for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
         safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_calendar")))
     elif call.data == "calendar_overdue":
-        show_overdue_tasks(call.message.chat.id, call.from_user.id)
+        show_overdue_tasks(call.message.chat.id, call.from_user.id, callback_back="menu_calendar")
     elif call.data == "calendar_export":
         safe_edit(call, "🔗 ЭКСПОРТ В КАЛЕНДАРЬ будет доступен в следующем обновлении.\nИспользуйте: /today, /week, /overdue", types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_calendar")))
 
@@ -409,7 +403,7 @@ def show_reminders_menu(call):
 @bot.callback_query_handler(func=lambda call: call.data == "reminder_templates")
 def reminder_templates(call):
     bot.answer_callback_query(call.id)
-    text = "⚙️ ШАБЛОНЫ НАПОМИНАНИЙ ПО УМОЛЧАНИЮ:\n• 📝 Контрольная: за 3 дня, за 1 день, за 2 часа (без времени в тексте)\n• 🧪 Лабораторная: за 2 дня, за 1 день, за 1 час (без времени в тексте)\n• 📚 ДЗ: за 1 день, за 3 часа (без времени в тексте)\n• 🎓 Экзамен: за 7 дней, за 3 дня, за 1 день, за 2 часа (без времени в тексте)\n• 📖 Курсовая: за 14 дней, за 7 дней, за 3 дня, за 1 день"
+    text = "⚙️ ШАБЛОНЫ НАПОМИНАНИЙ ПО УМОЛЧАНИЮ:\n• 📝 Контрольная: за 3 дня, за 1 день\n• 🧪 Лабораторная: за 2 дня, за 1 день\n• 📚 ДЗ: за 1 день, за 3 часа\n• 🎓 Экзамен: за 7 дней, за 3 дня, за 1 день"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_reminders")))
 
 @bot.callback_query_handler(func=lambda call: call.data == "reminder_system")
@@ -510,7 +504,7 @@ def show_statistics(call):
         for s in by_subj: r = (s['comp'] / s['total'] * 100) if s['total'] > 0 else 0; text += f"  {s['emoji']} {s['name']}: {r:.0f}% ({s['comp']}/{s['total']})\n"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu")))
 
-# ========== РАЗДЕЛ 7: МОИ РАБОТЫ (ИСПРАВЛЕН) ==========
+# ========== РАЗДЕЛ 7: МОИ РАБОТЫ (ПОЛНОСТЬЮ ИСПРАВЛЕН) ==========
 def show_my_tasks_main(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -562,8 +556,7 @@ def filter_tasks_by_status(call):
                           WHERE t.user_id = ? AND t.due_date < ? AND t.status = 'pending' ORDER BY t.due_date''',
                        (call.from_user.id, today))
         title = "⚠️ ПРОСРОЧЕННЫЕ"
-    else:
-        return
+    else: return
     tasks = cursor.fetchall()
     show_task_list(call, tasks, title, "menu_my_tasks")
 
@@ -690,12 +683,29 @@ def quick_action_handler(call):
         safe_edit(call, text, kb_back)
         
     elif action == "overdue":
-        show_overdue_tasks(call.message.chat.id, call.from_user.id)
+        show_overdue_tasks(call.message.chat.id, call.from_user.id, callback_back="menu_quick")
 
-# ========== ФОНОВАЯ СИСТЕМА УВЕДОМЛЕНИЙ ==========
+def show_overdue_tasks(chat_id, user_id, callback_back="back_to_menu"):
+    today = datetime.now().date().strftime("%Y-%m-%d")
+    cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
+                      WHERE t.user_id = ? AND t.due_date < ? AND t.status = 'pending' ORDER BY t.due_date''', (user_id, today))
+    tasks = cursor.fetchall()
+    if not tasks:
+        return bot.send_message(chat_id, "✅ Отлично! У вас нет просроченных работ.", reply_markup=nav_buttons(callback_back))
+    text = "⚠️ ПРОСРОЧЕННЫЕ РАБОТЫ:\n"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for t in tasks:
+        due = datetime.strptime(t['due_date'], "%Y-%m-%d").date()
+        days = (datetime.now().date() - due).days
+        text += f"\n{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']}\n  ⏰ Просрочено на {days} дн. ({format_date(t['due_date'])})"
+        kb.add(types.InlineKeyboardButton(f"⚙️ {t['title'][:25]}", callback_data=f"my_task_{t['id']}"))
+    kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data=callback_back))
+    bot.send_message(chat_id, text, reply_markup=kb, parse_mode="Markdown")
+
+# ========== ФОНОВАЯ СИСТЕМА УВЕДОМЛЕНИЙ (НАСТРОЕНА) ==========
 def notification_scheduler():
     while True:
-        time.sleep(60) # Проверка каждую минуту
+        time.sleep(60)
         try:
             now = datetime.now()
             today_str = now.strftime("%Y-%m-%d")
@@ -708,9 +718,9 @@ def notification_scheduler():
                 settings = get_user_settings(uid)
                 
                 if settings['aggregation_enabled']:
-                    # Дайджест
+                    # Режим: ДАЙДЖЕСТ
                     if current_hour == settings['aggregation_hour']:
-                        cursor.execute("SELECT * FROM reminder_log WHERE user_id=? AND notify_date=?", (uid, today_str))
+                        cursor.execute("SELECT * FROM reminder_log WHERE user_id=? AND notify_date=? AND task_id IS NULL", (uid, today_str))
                         if not cursor.fetchone():
                             cursor.execute("SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending'", (uid, today_str))
                             tasks = cursor.fetchall()
@@ -722,9 +732,9 @@ def notification_scheduler():
                                     bot.send_message(uid, text, parse_mode="Markdown")
                                     cursor.execute("INSERT INTO reminder_log (user_id, notify_date) VALUES (?, ?)", (uid, today_str))
                                     conn.commit()
-                                except Exception as e: logging.error(f"Notify error: {e}")
+                                except: pass
                 else:
-                    # Индивидуальные напоминания (в 09:00, если не отправлено)
+                    # Режим: ИНДИВИДУАЛЬНЫЕ (в 09:00)
                     if current_hour == 9:
                         cursor.execute("SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending'", (uid, today_str))
                         tasks = cursor.fetchall()
