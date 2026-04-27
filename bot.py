@@ -16,16 +16,17 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 
 # ========== БАЗА ДАННЫХ ==========
 conn = sqlite3.connect('university_bot.db', check_same_thread=False)
-conn.row_factory = sqlite3.Row  # Позволяет обращаться к колонкам по имени: row['name']
+conn.row_factory = sqlite3.Row  # Безопасный доступ к колонкам по имени
 cursor = conn.cursor()
 
+# Инициализация таблиц
 cursor.executescript('''
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     username TEXT,
     first_name TEXT,
     last_name TEXT,
-    timezone TEXT DEFAULT 'UTC',
+    university TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS subjects (
@@ -62,6 +63,14 @@ CREATE TABLE IF NOT EXISTS user_settings (
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 ''')
+
+# Добавление колонки university, если БД старая
+try:
+    cursor.execute("ALTER TABLE users ADD COLUMN university TEXT DEFAULT ''")
+    conn.commit()
+except:
+    pass  # Колонка уже существует
+
 conn.commit()
 
 # ========== ЭМОДЗИ И КОНСТАНТЫ ==========
@@ -73,6 +82,9 @@ TASK_TYPE_EMOJIS = {
     "coursework": "📖 Курсовая/Диплом",
     "other": "📌 Другое"
 }
+
+user_actions = {}  # Для хранения состояний (например, переноса даты)
+user_temp = {}     # Для добавления работ
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def get_user_settings(user_id):
@@ -128,6 +140,14 @@ def get_main_keyboard():
     )
     return keyboard
 
+def nav_buttons(section_callback="back_to_menu", main_callback="back_to_menu"):
+    """Генерирует стандартные кнопки навигации."""
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    if section_callback:
+        kb.add(types.InlineKeyboardButton("◀️ В РАЗДЕЛ", callback_data=section_callback))
+    kb.add(types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
+    return kb
+
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -149,7 +169,7 @@ def generic_command_handler(message):
                           (message.from_user.id, today_str))
         tasks = cursor.fetchall()
         if not tasks: return bot.send_message(message.chat.id, f"📅 СЕГОДНЯ ({format_date(today_str)})\nНет запланированных работ.")
-        text = f"📅 СЕГОДНЯ ({format_date(today_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        text = f"📅 СЕГОДНЯ ({format_date(today_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']}" for t in tasks])
         bot.send_message(message.chat.id, text, parse_mode="Markdown")
     elif cmd == 'tomorrow':
         tom_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -158,7 +178,7 @@ def generic_command_handler(message):
                           (message.from_user.id, tom_str))
         tasks = cursor.fetchall()
         if not tasks: return bot.send_message(message.chat.id, f"📅 ЗАВТРА ({format_date(tom_str)})\nНет запланированных работ.")
-        text = f"📅 ЗАВТРА ({format_date(tom_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        text = f"📅 ЗАВТРА ({format_date(tom_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']}" for t in tasks])
         bot.send_message(message.chat.id, text, parse_mode="Markdown")
     elif cmd == 'week':
         today = datetime.now().date()
@@ -172,13 +192,11 @@ def generic_command_handler(message):
         text = f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
         bot.send_message(message.chat.id, text, parse_mode="Markdown")
     elif cmd == 'overdue':
-        show_overdue_tasks(message.chat.id, message.from_user.id)
+        show_overdue_tasks(message.chat.id, message.from_user.id, callback_back="menu_quick")
     elif cmd == 'add':
         start_add_flow(message.from_user.id, message.chat.id)
 
 # ========== УНИВЕРСАЛЬНЫЕ ДЕЙСТВИЯ С ЗАДАЧАМИ ==========
-user_actions = {}
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("my_task_"))
 def task_action_menu(call):
     bot.answer_callback_query(call.id)
@@ -192,7 +210,8 @@ def task_action_menu(call):
         kb.add(types.InlineKeyboardButton("✅ ВЫПОЛНЕНА", callback_data=f"task_complete_{task_id}"),
                types.InlineKeyboardButton("📅 ПЕРЕНЕСТИ ДАТУ", callback_data=f"task_postpone_{task_id}"),
                types.InlineKeyboardButton("🗑 УДАЛИТЬ", callback_data=f"task_delete_{task_id}"))
-    kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu"))
+    kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"),
+           types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
     safe_edit(call, f"📝 **{t['title']}**\n📚 {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')}\n📅 Сдача: {format_date(t['due_date'])}\nСтатус: {t['status']}", kb)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("task_complete_"))
@@ -201,13 +220,13 @@ def task_complete(call):
     t_id = int(call.data.split("_")[2])
     cursor.execute("UPDATE tasks SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?", (t_id,))
     conn.commit()
-    safe_edit(call, "✅ Работа успешно отмечена как выполненная.", types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ В МЕНЮ", callback_data="back_to_menu")))
+    bot.send_message(call.message.chat.id, "✅ Работа успешно отмечена как выполненная.", reply_markup=nav_buttons("menu_my_tasks"))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("task_postpone_"))
 def task_postpone_start(call):
     bot.answer_callback_query(call.id)
     t_id = int(call.data.split("_")[2])
-    user_actions[call.from_user.id] = {'action': 'postpone', 'task_id': t_id}
+    user_actions[call.from_user.id] = {'action': 'postpone', 'task_id': t_id, 'section': 'my_tasks'}
     msg = bot.send_message(call.message.chat.id, "📅 Введите новую дату сдачи (ДД.ММ.ГГГГ):")
     bot.register_next_step_handler(msg, process_postpone_date, call.from_user.id)
 
@@ -218,7 +237,9 @@ def process_postpone_date(message, user_id):
         new_date = parse_date(message.text)
         cursor.execute("UPDATE tasks SET due_date=? WHERE id=?", (new_date, act['task_id']))
         conn.commit()
-        bot.send_message(message.chat.id, f"✅ Дата успешно перенесена на {format_date(new_date)}.")
+        section = act.get('section', 'my_tasks')
+        bot.send_message(message.chat.id, f"✅ Дата успешно перенесена на {format_date(new_date)}.", 
+                         reply_markup=nav_buttons(f"menu_{section}" if section != 'quick' else "menu_quick"))
     except:
         bot.send_message(message.chat.id, "❌ Неверный формат. Используйте ДД.ММ.ГГГГ")
         msg = bot.send_message(message.chat.id, "📅 Введите новую дату сдачи (ДД.ММ.ГГГГ):")
@@ -232,15 +253,15 @@ def task_delete(call):
     t_id = int(call.data.split("_")[2])
     cursor.execute("DELETE FROM tasks WHERE id=?", (t_id,))
     conn.commit()
-    safe_edit(call, "🗑 Работа успешно удалена.", types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ В МЕНЮ", callback_data="back_to_menu")))
+    bot.send_message(call.message.chat.id, "🗑 Работа успешно удалена.", reply_markup=nav_buttons("menu_my_tasks"))
 
-def show_overdue_tasks(chat_id, user_id):
+def show_overdue_tasks(chat_id, user_id, callback_back="back_to_menu"):
     today = datetime.now().date().strftime("%Y-%m-%d")
     cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
                       WHERE t.user_id = ? AND t.due_date < ? AND t.status = 'pending' ORDER BY t.due_date''', (user_id, today))
     tasks = cursor.fetchall()
     if not tasks:
-        return bot.send_message(chat_id, "✅ Отлично! У вас нет просроченных работ.", reply_markup=get_main_keyboard())
+        return bot.send_message(chat_id, "✅ Отлично! У вас нет просроченных работ.", reply_markup=nav_buttons(callback_back))
     text = "⚠️ ПРОСРОЧЕННЫЕ РАБОТЫ:\n"
     kb = types.InlineKeyboardMarkup(row_width=1)
     for t in tasks:
@@ -248,7 +269,7 @@ def show_overdue_tasks(chat_id, user_id):
         days = (datetime.now().date() - due).days
         text += f"\n{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']}\n  ⏰ Просрочено на {days} дн. ({format_date(t['due_date'])})"
         kb.add(types.InlineKeyboardButton(f"⚙️ {t['title'][:25]}", callback_data=f"my_task_{t['id']}"))
-    kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu"))
+    kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data=callback_back))
     bot.send_message(chat_id, text, reply_markup=kb, parse_mode="Markdown")
 
 # ========== МЕНЮ И НАВИГАЦИЯ ==========
@@ -297,10 +318,8 @@ def show_subject_details(call):
     overdue = [t for t in tasks if datetime.strptime(t['due_date'], "%Y-%m-%d").date() < today]
 
     text = f"{subj['emoji']} **{subj['name']}**\n\n"
-    if overdue:
-        text += "⚠️ ПРОСРОЧЕННЫЕ:\n" + "".join([f"  • {TASK_TYPE_EMOJIS.get(t['task_type'],'📌')} {t['title']} — {format_date(t['due_date'])}\n" for t in overdue]) + "\n"
-    if upcoming:
-        text += "📋 ПРЕДСТОЯЩИЕ:\n" + "".join([f"  • {TASK_TYPE_EMOJIS.get(t['task_type'],'📌')} {t['title']} — {format_date(t['due_date'])}\n" for t in upcoming]) + "\n"
+    if overdue: text += "⚠️ ПРОСРОЧЕННЫЕ:\n" + "".join([f"  • {TASK_TYPE_EMOJIS.get(t['task_type'],'📌')} {t['title']} — {format_date(t['due_date'])}\n" for t in overdue]) + "\n"
+    if upcoming: text += "📋 ПРЕДСТОЯЩИЕ:\n" + "".join([f"  • {TASK_TYPE_EMOJIS.get(t['task_type'],'📌')} {t['title']} — {format_date(t['due_date'])}\n" for t in upcoming]) + "\n"
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(types.InlineKeyboardButton("➕ ДОБАВИТЬ РАБОТУ", callback_data=f"add_to_subject_{sid}"),
@@ -331,7 +350,7 @@ def edit_subject_tasks(call):
 def add_to_subject(call):
     bot.answer_callback_query(call.id)
     sid = int(call.data.split("_")[3])
-    user_actions[call.from_user.id] = {'subject_id': sid, 'preselected': True}
+    user_temp[call.from_user.id] = {'subject_id': sid, 'preselected': True}
     start_add_flow(call.from_user.id, call.message.chat.id, call)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("del_subject_"))
@@ -362,7 +381,6 @@ def save_subject(message):
         bot.send_message(message.chat.id, f"❌ Предмет **{name}** уже существует!", reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔄 ПОПРОБОВАТЬ ЕЩЁ", callback_data="add_subject")))
 
 # ========== РАЗДЕЛ 2: БЫСТРОЕ ДОБАВЛЕНИЕ ==========
-user_temp = {}
 def start_add_flow(user_id, chat_id, call=None):
     cursor.execute("SELECT id, name, emoji FROM subjects WHERE user_id = ?", (user_id,))
     subjects = cursor.fetchall()
@@ -502,7 +520,7 @@ def show_reminders_menu(call):
 @bot.callback_query_handler(func=lambda call: call.data == "reminder_templates")
 def reminder_templates(call):
     bot.answer_callback_query(call.id)
-    text = "⚙️ ШАБЛОНЫ НАПОМИНАНИЙ ПО УМОЛЧАНИЮ:\n• 📝 Контрольная: за 3 дня, за 1 день\n• 🧪 Лабораторная: за 2 дня, за 1 день\n• 📚 ДЗ: за 1 день, за 3 часа (без времени в тексте)\n• 🎓 Экзамен: за 7 дней, за 3 дня, за 1 день\n• 📖 Курсовая: за 14 дней, за 7 дней, за 3 дня, за 1 день"
+    text = "⚙️ ШАБЛОНЫ НАПОМИНАНИЙ ПО УМОЛЧАНИЮ:\n• 📝 Контрольная: за 3 дня, за 1 день\n• 🧪 Лабораторная: за 2 дня, за 1 день\n• 📚 ДЗ: за 1 день, за 3 часа\n• 🎓 Экзамен: за 7 дней, за 3 дня, за 1 день"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_reminders")))
 
 @bot.callback_query_handler(func=lambda call: call.data == "reminder_system")
@@ -512,7 +530,7 @@ def reminder_system(call):
     status = "✅ ВКЛЮЧЕНА" if s['aggregation_enabled'] else "❌ ВЫКЛЮЧЕНА"
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(types.InlineKeyboardButton("🔘 ВКЛ/ВЫКЛ СИСТЕМУ", callback_data="agg_toggle"),
-           types.InlineKeyboardButton("⏰ ИЗМЕНИТЬ ВРЕМЯ УВЕДОМЛЕНИЙ", callback_data="reminder_change_time"),
+           types.InlineKeyboardButton("⏰ ИЗМЕНИТЬ ВРЕМЯ", callback_data="reminder_change_time"),
            types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_reminders"))
     text = f"🧠 СИСТЕМА УВЕДОМЛЕНИЙ\nСтатус: {status}\nТекущее время дайджеста: {s['aggregation_hour']}:00"
     safe_edit(call, text, kb)
@@ -564,32 +582,23 @@ def settings_handler(call):
         cursor.execute("SELECT * FROM users WHERE user_id = ?", (call.from_user.id,))
         u = cursor.fetchone()
         kb = types.InlineKeyboardMarkup().add(
-            types.InlineKeyboardButton("🌍 ИЗМЕНИТЬ ЧАСОВОЙ ПОЯС", callback_data="settings_timezone"),
+            types.InlineKeyboardButton("🏛️ ИЗМЕНИТЬ ВУЗ", callback_data="settings_university"),
             types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_settings"))
-        safe_edit(call, f"👤 ПРОФИЛЬ:\nID: {u['user_id']}\nИмя: {u['first_name'] or '—'} {u['last_name'] or ''}\nUsername: @{u['username'] or '—'}\n🌍 Часовой пояс: {u['timezone']}", kb)
-    elif call.data == "settings_timezone":
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        tz_list = ["UTC+3 (МСК)", "UTC+4 (Самара)", "UTC+5 (Екб)", "UTC+6 (Омск)", 
-                   "UTC+7 (Нск)", "UTC+8 (Ирк)", "UTC+9 (Як)", "UTC+10 (Влд)"]
-        for tz in tz_list: kb.add(types.InlineKeyboardButton(tz, callback_data=f"tz_{tz}"))
-        kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="settings_profile"))
-        safe_edit(call, "🌍 ВЫБЕРИТЕ ЧАСОВОЙ ПОЯС", kb)
-    elif call.data.startswith("tz_"):
-        bot.answer_callback_query(call.id)
-        tz_name = call.data.split("_")[1]
-        cursor.execute("UPDATE users SET timezone = ? WHERE user_id = ?", (tz_name, call.from_user.id))
-        conn.commit()
-        # МГНОВЕННО ОБНОВЛЯЕМ ПРОФИЛЬ С НОВЫМ ПОЯСОМ
-        cursor.execute("SELECT * FROM users WHERE user_id = ?", (call.from_user.id,))
-        u = cursor.fetchone()
-        kb = types.InlineKeyboardMarkup().add(
-            types.InlineKeyboardButton("🌍 ИЗМЕНИТЬ ЧАСОВОЙ ПОЯС", callback_data="settings_timezone"),
-            types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_settings"))
-        bot.edit_message_text(f"👤 ПРОФИЛЬ:\nID: {u['user_id']}\nИмя: {u['first_name'] or '—'} {u['last_name'] or ''}\nUsername: @{u['username'] or '—'}\n🌍 Часовой пояс: {u['timezone']}", call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
+        safe_edit(call, f"👤 ПРОФИЛЬ:\nID: {u['user_id']}\nИмя: {u['first_name'] or '—'} {u['last_name'] or ''}\n🏛️ ВУЗ: {u['university'] or 'Не указан'}", kb)
+    elif call.data == "settings_university":
+        msg = bot.send_message(call.message.chat.id, "🏛️ Введите название вашего учебного заведения:")
+        bot.register_next_step_handler(msg, save_university, call.from_user.id)
     elif call.data == "settings_notifications":
         s = get_user_settings(call.from_user.id)
         kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_settings"))
-        safe_edit(call, f"🔔 НАСТРОЙКИ УВЕДОМЛЕНИЙ:\n🧠 Система уведомлений: {'✅ Вкл' if s['aggregation_enabled'] else '❌ Выкл'}\n⏰ Время дайджеста: {s['aggregation_hour']}:00\nТихие часы: {s.get('quiet_hours_start',23)}:00 - {s.get('quiet_hours_end',8)}:00", kb)
+        safe_edit(call, f"🔔 НАСТРОЙКИ УВЕДОМЛЕНИЙ:\n🧠 Система уведомлений: {'✅ Вкл' if s['aggregation_enabled'] else '❌ Выкл'}\n⏰ Время дайджеста: {s['aggregation_hour']}:00\n\nТихие часы: {s.get('quiet_hours_start',23)}:00 - {s.get('quiet_hours_end',8)}:00", kb)
+
+def save_university(message, user_id):
+    uni = message.text.strip()
+    if len(uni) > 100: return bot.send_message(message.chat.id, "❌ Название слишком длинное.")
+    cursor.execute("UPDATE users SET university = ? WHERE user_id = ?", (uni, user_id))
+    conn.commit()
+    bot.send_message(message.chat.id, f"✅ ВУЗ изменён на: **{uni}**", reply_markup=nav_buttons("menu_settings"), parse_mode="Markdown")
 
 # ========== РАЗДЕЛ 6: СТАТИСТИКА ==========
 def show_statistics(call):
@@ -612,7 +621,7 @@ def show_statistics(call):
         for s in by_subj: r = (s['comp'] / s['total'] * 100) if s['total'] > 0 else 0; text += f"  {s['emoji']} {s['name']}: {r:.0f}% ({s['comp']}/{s['total']})\n"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu")))
 
-# ========== РАЗДЕЛ 7: МОИ РАБОТЫ (ПОЛНОСТЬЮ ИСПРАВЛЕН) ==========
+# ========== РАЗДЕЛ 7: МОИ РАБОТЫ ==========
 def show_my_tasks_filter(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -637,16 +646,16 @@ def filter_my_tasks(call):
     cursor.execute(base_q, params)
     tasks = cursor.fetchall()
     if not tasks:
-        return safe_edit(call, "📂 РАБОТ ПО ФИЛЬТРУ НЕ НАЙДЕНО.", types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_my_tasks")))
+        return safe_edit(call, "📂 РАБОТ ПО ФИЛЬТРУ НЕ НАЙДЕНО.", types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"), types.InlineKeyboardButton("🏠 В МЕНЮ", callback_data="back_to_menu")))
     kb = types.InlineKeyboardMarkup(row_width=1)
     for t in tasks:
-        # Формат строго как просили: "название предмета" + "название работы"
         label = f"{t['name']} • {t['title']} ({format_date(t['due_date'])})"
         kb.add(types.InlineKeyboardButton(label, callback_data=f"my_task_{t['id']}"))
-    kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_my_tasks"))
+    kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"),
+           types.InlineKeyboardButton("🏠 В МЕНЮ", callback_data="back_to_menu"))
     safe_edit(call, f"📂 РЕЗУЛЬТАТ ФИЛЬТРА ({len(tasks)} работ):", kb)
 
-# ========== РАЗДЕЛ 8: БЫСТРЫЙ ПРОСМОТР (ИСПРАВЛЕН, БЕЗ ПЕРЕАДРЕСАЦИИ) ==========
+# ========== РАЗДЕЛ 8: БЫСТРЫЙ ПРОСМОТР ==========
 def show_quick_actions(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -661,10 +670,7 @@ def show_quick_actions(call):
 def quick_action_handler(call):
     bot.answer_callback_query(call.id)
     action = call.data.split("_")[1]
-    # Кнопка возврата именно в Быстрый просмотр
-    kb_back = types.InlineKeyboardMarkup(row_width=1)
-    kb_back.add(types.InlineKeyboardButton("◀️ В БЫСТРЫЙ ПРОСМОТР", callback_data="menu_quick"))
-    kb_back.add(types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
+    kb_back = nav_buttons("menu_quick")
 
     if action == "today":
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -700,7 +706,7 @@ def quick_action_handler(call):
         safe_edit(call, text, kb_back)
         
     elif action == "overdue":
-        show_overdue_tasks(call.message.chat.id, call.from_user.id)
+        show_overdue_tasks(call.message.chat.id, call.from_user.id, callback_back="menu_quick")
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
