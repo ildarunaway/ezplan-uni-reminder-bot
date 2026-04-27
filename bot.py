@@ -16,7 +16,7 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 
 # ========== БАЗА ДАННЫХ ==========
 conn = sqlite3.connect('university_bot.db', check_same_thread=False)
-conn.row_factory = sqlite3.Row
+conn.row_factory = sqlite3.Row  # Позволяет обращаться к колонкам по имени: row['name']
 cursor = conn.cursor()
 
 cursor.executescript('''
@@ -101,6 +101,7 @@ def parse_date(date_str):
     return datetime.strptime(date_str.strip(), "%d.%m.%Y").strftime("%Y-%m-%d")
 
 def safe_edit(call, text, reply_markup=None, parse_mode="Markdown"):
+    """Безопасное редактирование сообщения. Если не получается - отправит новое."""
     try:
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=reply_markup, parse_mode=parse_mode)
     except:
@@ -123,7 +124,7 @@ def get_main_keyboard():
     )
     keyboard.add(
         types.InlineKeyboardButton("📂 МОИ РАБОТЫ", callback_data="menu_my_tasks"),
-        types.InlineKeyboardButton("⚡ БЫСТРЫЙ ПРОСМОТР", callback_data="menu_quick") # Переименовано
+        types.InlineKeyboardButton("⚡ БЫСТРЫЙ ПРОСМОТР", callback_data="menu_quick")
     )
     return keyboard
 
@@ -138,54 +139,42 @@ def start(message):
         f"Я — твой умный помощник по учёбе. Нажимай на кнопку ниже, чтобы начать! 👇",
         reply_markup=keyboard)
 
-@bot.message_handler(commands=['today'])
-def cmd_today(message):
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
-                      WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
-                      (message.from_user.id, today_str))
-    tasks = cursor.fetchall()
-    if not tasks:
-        return bot.send_message(message.chat.id, f"📅 СЕГОДНЯ ({format_date(today_str)})\nНет запланированных работ. Отдыхай! 🎉")
-    text = f"📅 СЕГОДНЯ ({format_date(today_str)})\n\n"
-    for t in tasks: text += f"{t['emoji']} **{t['name']}**: {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(commands=['tomorrow'])
-def cmd_tomorrow(message):
-    tom_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
-                      WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
-                      (message.from_user.id, tom_str))
-    tasks = cursor.fetchall()
-    if not tasks:
-        return bot.send_message(message.chat.id, f"📅 ЗАВТРА ({format_date(tom_str)})\nНет запланированных работ.")
-    text = f"📅 ЗАВТРА ({format_date(tom_str)})\n\n"
-    for t in tasks: text += f"{t['emoji']} **{t['name']}**: {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(commands=['week'])
-def cmd_week(message):
-    today = datetime.now().date()
-    monday = today - timedelta(days=today.weekday())
-    sunday = monday + timedelta(days=6)
-    cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
-                      WHERE t.user_id = ? AND t.due_date BETWEEN ? AND ? AND t.status = 'pending' ORDER BY t.due_date''', 
-                      (message.from_user.id, monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")))
-    tasks = cursor.fetchall()
-    if not tasks:
-        return bot.send_message(message.chat.id, f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\nНет работ.")
-    text = f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\n\n"
-    for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(commands=['overdue'])
-def cmd_overdue(message):
-    show_overdue_tasks(message.chat.id, message.from_user.id)
-
-@bot.message_handler(commands=['add'])
-def cmd_add(message):
-    start_add_flow(message.from_user.id, message.chat.id)
+@bot.message_handler(commands=['today', 'tomorrow', 'week', 'overdue', 'add'])
+def generic_command_handler(message):
+    cmd = message.text[1:].lower()
+    if cmd == 'today':
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
+                          WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
+                          (message.from_user.id, today_str))
+        tasks = cursor.fetchall()
+        if not tasks: return bot.send_message(message.chat.id, f"📅 СЕГОДНЯ ({format_date(today_str)})\nНет запланированных работ.")
+        text = f"📅 СЕГОДНЯ ({format_date(today_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    elif cmd == 'tomorrow':
+        tom_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
+                          WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
+                          (message.from_user.id, tom_str))
+        tasks = cursor.fetchall()
+        if not tasks: return bot.send_message(message.chat.id, f"📅 ЗАВТРА ({format_date(tom_str)})\nНет запланированных работ.")
+        text = f"📅 ЗАВТРА ({format_date(tom_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    elif cmd == 'week':
+        today = datetime.now().date()
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
+                          WHERE t.user_id = ? AND t.due_date BETWEEN ? AND ? AND t.status = 'pending' ORDER BY t.due_date''', 
+                          (message.from_user.id, monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")))
+        tasks = cursor.fetchall()
+        if not tasks: return bot.send_message(message.chat.id, f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\nНет работ.")
+        text = f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    elif cmd == 'overdue':
+        show_overdue_tasks(message.chat.id, message.from_user.id)
+    elif cmd == 'add':
+        start_add_flow(message.from_user.id, message.chat.id)
 
 # ========== УНИВЕРСАЛЬНЫЕ ДЕЙСТВИЯ С ЗАДАЧАМИ ==========
 user_actions = {}
@@ -477,8 +466,7 @@ def calendar_handler(call):
                           WHERE t.user_id = ? AND t.due_date BETWEEN ? AND ? AND t.status = 'pending' ORDER BY t.due_date''',
                        (call.from_user.id, today.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
         tasks = cursor.fetchall()
-        if not tasks:
-            return safe_edit(call, "📆 НА МЕСЯЦ (+30 дней)\nНет работ на ближайшие 30 дней.")
+        if not tasks: return safe_edit(call, "📆 НА МЕСЯЦ (+30 дней)\nНет работ на ближайшие 30 дней.")
         text = "📆 РАБОТЫ НА МЕСЯЦ:\n"
         curr = None
         for t in tasks:
@@ -493,8 +481,7 @@ def calendar_handler(call):
                           WHERE t.user_id = ? AND t.due_date BETWEEN ? AND ? AND t.status = 'pending' ORDER BY t.due_date''',
                        (call.from_user.id, mon.strftime("%Y-%m-%d"), sun.strftime("%Y-%m-%d")))
         tasks = cursor.fetchall()
-        if not tasks:
-            return safe_edit(call, f"📋 НА НЕДЕЛЕ ({format_date(mon.strftime('%Y-%m-%d'))} - {format_date(sun.strftime('%Y-%m-%d'))})\nНет работ.")
+        if not tasks: return safe_edit(call, f"📋 НА НЕДЕЛЕ ({format_date(mon.strftime('%Y-%m-%d'))} - {format_date(sun.strftime('%Y-%m-%d'))})\nНет работ.")
         text = f"📋 НА НЕДЕЛЕ ({format_date(mon.strftime('%Y-%m-%d'))} - {format_date(sun.strftime('%Y-%m-%d'))})\n\n"
         for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
         safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_calendar")))
@@ -515,12 +502,7 @@ def show_reminders_menu(call):
 @bot.callback_query_handler(func=lambda call: call.data == "reminder_templates")
 def reminder_templates(call):
     bot.answer_callback_query(call.id)
-    text = "⚙️ ШАБЛОНЫ НАПОМИНАНИЙ ПО УМОЛЧАНИЮ:\n\n"
-    text += "• 📝 Контрольная: за 3 дня, за 1 день, за 2 часа (без времени в тексте)\n"
-    text += "• 🧪 Лабораторная: за 2 дня, за 1 день, за 1 час (без времени в тексте)\n"
-    text += "• 📚 ДЗ: за 1 день, за 3 часа (без времени в тексте)\n"
-    text += "• 🎓 Экзамен: за 7 дней, за 3 дня, за 1 день, за 2 часа (без времени в тексте)\n"
-    text += "• 📖 Курсовая: за 14 дней, за 7 дней, за 3 дня, за 1 день (без времени в тексте)\n"
+    text = "⚙️ ШАБЛОНЫ НАПОМИНАНИЙ ПО УМОЛЧАНИЮ:\n• 📝 Контрольная: за 3 дня, за 1 день\n• 🧪 Лабораторная: за 2 дня, за 1 день\n• 📚 ДЗ: за 1 день, за 3 часа (без времени в тексте)\n• 🎓 Экзамен: за 7 дней, за 3 дня, за 1 день\n• 📖 Курсовая: за 14 дней, за 7 дней, за 3 дня, за 1 день"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_reminders")))
 
 @bot.callback_query_handler(func=lambda call: call.data == "reminder_system")
@@ -532,7 +514,7 @@ def reminder_system(call):
     kb.add(types.InlineKeyboardButton("🔘 ВКЛ/ВЫКЛ СИСТЕМУ", callback_data="agg_toggle"),
            types.InlineKeyboardButton("⏰ ИЗМЕНИТЬ ВРЕМЯ УВЕДОМЛЕНИЙ", callback_data="reminder_change_time"),
            types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_reminders"))
-    text = f"🧠 СИСТЕМА УВЕДОМЛЕНИЙ\nСтатус: {status}\nТекущее время дайджеста: {s['aggregation_hour']}:00\n\nПри включении вы получаете ОДНО групповое сообщение в вечернее время."
+    text = f"🧠 СИСТЕМА УВЕДОМЛЕНИЙ\nСтатус: {status}\nТекущее время дайджеста: {s['aggregation_hour']}:00"
     safe_edit(call, text, kb)
 
 @bot.callback_query_handler(func=lambda call: call.data == "agg_toggle")
@@ -597,12 +579,17 @@ def settings_handler(call):
         tz_name = call.data.split("_")[1]
         cursor.execute("UPDATE users SET timezone = ? WHERE user_id = ?", (tz_name, call.from_user.id))
         conn.commit()
-        bot.answer_callback_query(call.id, f"✅ Часовой пояс изменён на {tz_name}", show_alert=True)
-        settings_profile(call) # Автоматически отображаем обновлённый профиль
+        # МГНОВЕННО ОБНОВЛЯЕМ ПРОФИЛЬ С НОВЫМ ПОЯСОМ
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (call.from_user.id,))
+        u = cursor.fetchone()
+        kb = types.InlineKeyboardMarkup().add(
+            types.InlineKeyboardButton("🌍 ИЗМЕНИТЬ ЧАСОВОЙ ПОЯС", callback_data="settings_timezone"),
+            types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_settings"))
+        bot.edit_message_text(f"👤 ПРОФИЛЬ:\nID: {u['user_id']}\nИмя: {u['first_name'] or '—'} {u['last_name'] or ''}\nUsername: @{u['username'] or '—'}\n🌍 Часовой пояс: {u['timezone']}", call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
     elif call.data == "settings_notifications":
         s = get_user_settings(call.from_user.id)
         kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_settings"))
-        safe_edit(call, f"🔔 НАСТРОЙКИ УВЕДОМЛЕНИЙ:\n🧠 Система уведомлений: {'✅ Вкл' if s['aggregation_enabled'] else '❌ Выкл'}\n⏰ Время дайджеста: {s['aggregation_hour']}:00\n\nТихие часы: {s.get('quiet_hours_start',23)}:00 - {s.get('quiet_hours_end',8)}:00", kb)
+        safe_edit(call, f"🔔 НАСТРОЙКИ УВЕДОМЛЕНИЙ:\n🧠 Система уведомлений: {'✅ Вкл' if s['aggregation_enabled'] else '❌ Выкл'}\n⏰ Время дайджеста: {s['aggregation_hour']}:00\nТихие часы: {s.get('quiet_hours_start',23)}:00 - {s.get('quiet_hours_end',8)}:00", kb)
 
 # ========== РАЗДЕЛ 6: СТАТИСТИКА ==========
 def show_statistics(call):
@@ -625,7 +612,7 @@ def show_statistics(call):
         for s in by_subj: r = (s['comp'] / s['total'] * 100) if s['total'] > 0 else 0; text += f"  {s['emoji']} {s['name']}: {r:.0f}% ({s['comp']}/{s['total']})\n"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu")))
 
-# ========== РАЗДЕЛ 7: МОИ РАБОТЫ (ПЕРЕПИСАН ПОД ТРЕБОВАНИЯ) ==========
+# ========== РАЗДЕЛ 7: МОИ РАБОТЫ (ПОЛНОСТЬЮ ИСПРАВЛЕН) ==========
 def show_my_tasks_filter(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -653,13 +640,13 @@ def filter_my_tasks(call):
         return safe_edit(call, "📂 РАБОТ ПО ФИЛЬТРУ НЕ НАЙДЕНО.", types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_my_tasks")))
     kb = types.InlineKeyboardMarkup(row_width=1)
     for t in tasks:
-        # Формат: "название предмета" + "название работы"
+        # Формат строго как просили: "название предмета" + "название работы"
         label = f"{t['name']} • {t['title']} ({format_date(t['due_date'])})"
         kb.add(types.InlineKeyboardButton(label, callback_data=f"my_task_{t['id']}"))
     kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_my_tasks"))
     safe_edit(call, f"📂 РЕЗУЛЬТАТ ФИЛЬТРА ({len(tasks)} работ):", kb)
 
-# ========== РАЗДЕЛ 8: БЫСТРЫЙ ПРОСМОТР (ПЕРЕИМЕНОВАН И ИСПРАВЛЕН) ==========
+# ========== РАЗДЕЛ 8: БЫСТРЫЙ ПРОСМОТР (ИСПРАВЛЕН, БЕЗ ПЕРЕАДРЕСАЦИИ) ==========
 def show_quick_actions(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -674,16 +661,20 @@ def show_quick_actions(call):
 def quick_action_handler(call):
     bot.answer_callback_query(call.id)
     action = call.data.split("_")[1]
+    # Кнопка возврата именно в Быстрый просмотр
+    kb_back = types.InlineKeyboardMarkup(row_width=1)
+    kb_back.add(types.InlineKeyboardButton("◀️ В БЫСТРЫЙ ПРОСМОТР", callback_data="menu_quick"))
+    kb_back.add(types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
+
     if action == "today":
         today_str = datetime.now().strftime("%Y-%m-%d")
         cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
                           WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
                           (call.from_user.id, today_str))
         tasks = cursor.fetchall()
-        if not tasks: return safe_edit(call, f"📅 СЕГОДНЯ ({format_date(today_str)})\nНет запланированных работ. Отдыхай! 🎉")
-        text = f"📅 СЕГОДНЯ ({format_date(today_str)})\n\n"
-        for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
-        safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_quick")))
+        if not tasks: return safe_edit(call, f"📅 СЕГОДНЯ ({format_date(today_str)})\nНет запланированных работ. Отдыхай! 🎉", kb_back)
+        text = f"📅 СЕГОДНЯ ({format_date(today_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        safe_edit(call, text, kb_back)
         
     elif action == "tomorrow":
         tom_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -691,10 +682,9 @@ def quick_action_handler(call):
                           WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
                           (call.from_user.id, tom_str))
         tasks = cursor.fetchall()
-        if not tasks: return safe_edit(call, f"📅 ЗАВТРА ({format_date(tom_str)})\nНет запланированных работ.")
-        text = f"📅 ЗАВТРА ({format_date(tom_str)})\n\n"
-        for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
-        safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_quick")))
+        if not tasks: return safe_edit(call, f"📅 ЗАВТРА ({format_date(tom_str)})\nНет запланированных работ.", kb_back)
+        text = f"📅 ЗАВТРА ({format_date(tom_str)})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        safe_edit(call, text, kb_back)
         
     elif action == "week":
         today = datetime.now().date()
@@ -705,10 +695,9 @@ def quick_action_handler(call):
                           (call.from_user.id, monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")))
         tasks = cursor.fetchall()
         if not tasks:
-            return safe_edit(call, f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\nНет работ.")
-        text = f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\n\n"
-        for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
-        safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_quick")))
+            return safe_edit(call, f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\nНет работ.", kb_back)
+        text = f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\n\n" + "\n".join([f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}" for t in tasks])
+        safe_edit(call, text, kb_back)
         
     elif action == "overdue":
         show_overdue_tasks(call.message.chat.id, call.from_user.id)
