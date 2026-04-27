@@ -16,10 +16,9 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 
 # ========== БАЗА ДАННЫХ ==========
 conn = sqlite3.connect('university_bot.db', check_same_thread=False)
-conn.row_factory = sqlite3.Row  # Позволяет обращаться к колонкам по имени: row['name']
+conn.row_factory = sqlite3.Row
 cursor = conn.cursor()
 
-# Инициализация таблиц
 cursor.executescript('''
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -102,7 +101,6 @@ def parse_date(date_str):
     return datetime.strptime(date_str.strip(), "%d.%m.%Y").strftime("%Y-%m-%d")
 
 def safe_edit(call, text, reply_markup=None, parse_mode="Markdown"):
-    """Безопасное редактирование сообщения. Если не получается - отправит новое."""
     try:
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=reply_markup, parse_mode=parse_mode)
     except:
@@ -125,7 +123,7 @@ def get_main_keyboard():
     )
     keyboard.add(
         types.InlineKeyboardButton("📂 МОИ РАБОТЫ", callback_data="menu_my_tasks"),
-        types.InlineKeyboardButton("⚡ БЫСТРЫЕ ДЕЙСТВИЯ", callback_data="menu_quick")
+        types.InlineKeyboardButton("⚡ БЫСТРЫЙ ПРОСМОТР", callback_data="menu_quick") # Переименовано
     )
     return keyboard
 
@@ -522,7 +520,7 @@ def reminder_templates(call):
     text += "• 🧪 Лабораторная: за 2 дня, за 1 день, за 1 час (без времени в тексте)\n"
     text += "• 📚 ДЗ: за 1 день, за 3 часа (без времени в тексте)\n"
     text += "• 🎓 Экзамен: за 7 дней, за 3 дня, за 1 день, за 2 часа (без времени в тексте)\n"
-    text += "• 📖 Курсовая: за 14 дней, за 7 дней, за 3 дня, за 1 день (без времени в тексте)\n\nНастройка шаблонов будет доступна в следующем обновлении."
+    text += "• 📖 Курсовая: за 14 дней, за 7 дней, за 3 дня, за 1 день (без времени в тексте)\n"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_reminders")))
 
 @bot.callback_query_handler(func=lambda call: call.data == "reminder_system")
@@ -566,7 +564,7 @@ def set_agg_hour(call):
     cursor.execute("UPDATE user_settings SET aggregation_hour = ? WHERE user_id = ?", (h, call.from_user.id))
     conn.commit()
     bot.answer_callback_query(call.id, f"⏰ Время установлено на {h:02}:00", show_alert=True)
-    reminder_system(call) # Возврат в меню системы, чтобы пользователь увидел обновлённое время
+    reminder_system(call)
 
 # ========== РАЗДЕЛ 5: НАСТРОЙКИ ==========
 def show_settings_menu(call):
@@ -595,11 +593,12 @@ def settings_handler(call):
         kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="settings_profile"))
         safe_edit(call, "🌍 ВЫБЕРИТЕ ЧАСОВОЙ ПОЯС", kb)
     elif call.data.startswith("tz_"):
+        bot.answer_callback_query(call.id)
         tz_name = call.data.split("_")[1]
         cursor.execute("UPDATE users SET timezone = ? WHERE user_id = ?", (tz_name, call.from_user.id))
         conn.commit()
         bot.answer_callback_query(call.id, f"✅ Часовой пояс изменён на {tz_name}", show_alert=True)
-        settings_handler(call) # Обновляем профиль, чтобы показать новый пояс
+        settings_profile(call) # Автоматически отображаем обновлённый профиль
     elif call.data == "settings_notifications":
         s = get_user_settings(call.from_user.id)
         kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_settings"))
@@ -626,7 +625,7 @@ def show_statistics(call):
         for s in by_subj: r = (s['comp'] / s['total'] * 100) if s['total'] > 0 else 0; text += f"  {s['emoji']} {s['name']}: {r:.0f}% ({s['comp']}/{s['total']})\n"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu")))
 
-# ========== РАЗДЕЛ 7: МОИ РАБОТЫ ==========
+# ========== РАЗДЕЛ 7: МОИ РАБОТЫ (ПЕРЕПИСАН ПОД ТРЕБОВАНИЯ) ==========
 def show_my_tasks_filter(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -635,7 +634,7 @@ def show_my_tasks_filter(call):
     for k, v in TASK_TYPE_EMOJIS.items():
         kb.add(types.InlineKeyboardButton(v, callback_data=f"filter_type_{k}"))
     kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu"))
-    safe_edit(call, "📂 МОИ РАБОТЫ\nВыберите фильтр:", kb)
+    safe_edit(call, "📂 МОИ РАБОТЫ\nВыберите фильтр просмотра:", kb)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("filter_"))
 def filter_my_tasks(call):
@@ -654,12 +653,13 @@ def filter_my_tasks(call):
         return safe_edit(call, "📂 РАБОТ ПО ФИЛЬТРУ НЕ НАЙДЕНО.", types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_my_tasks")))
     kb = types.InlineKeyboardMarkup(row_width=1)
     for t in tasks:
-        label = f"{t['emoji']} {t['name']} • {t['title']} ({format_date(t['due_date'])})"
+        # Формат: "название предмета" + "название работы"
+        label = f"{t['name']} • {t['title']} ({format_date(t['due_date'])})"
         kb.add(types.InlineKeyboardButton(label, callback_data=f"my_task_{t['id']}"))
     kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_my_tasks"))
     safe_edit(call, f"📂 РЕЗУЛЬТАТ ФИЛЬТРА ({len(tasks)} работ):", kb)
 
-# ========== РАЗДЕЛ 8: БЫСТРЫЕ ДЕЙСТВИЯ ==========
+# ========== РАЗДЕЛ 8: БЫСТРЫЙ ПРОСМОТР (ПЕРЕИМЕНОВАН И ИСПРАВЛЕН) ==========
 def show_quick_actions(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -668,16 +668,50 @@ def show_quick_actions(call):
            types.InlineKeyboardButton("📅 НЕДЕЛЯ", callback_data="quick_week"),
            types.InlineKeyboardButton("⚠️ ПРОСРОЧЕННЫЕ", callback_data="quick_overdue"))
     kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu"))
-    safe_edit(call, "⚡ БЫСТРЫЕ ДЕЙСТВИЯ", kb)
+    safe_edit(call, "⚡ БЫСТРЫЙ ПРОСМОТР", kb)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("quick_"))
 def quick_action_handler(call):
     bot.answer_callback_query(call.id)
     action = call.data.split("_")[1]
-    if action == "today": cmd_today(call.message)
-    elif action == "tomorrow": cmd_tomorrow(call.message)
-    elif action == "week": cmd_week(call.message)
-    elif action == "overdue": show_overdue_tasks(call.message.chat.id, call.from_user.id)
+    if action == "today":
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
+                          WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
+                          (call.from_user.id, today_str))
+        tasks = cursor.fetchall()
+        if not tasks: return safe_edit(call, f"📅 СЕГОДНЯ ({format_date(today_str)})\nНет запланированных работ. Отдыхай! 🎉")
+        text = f"📅 СЕГОДНЯ ({format_date(today_str)})\n\n"
+        for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
+        safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_quick")))
+        
+    elif action == "tomorrow":
+        tom_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
+                          WHERE t.user_id = ? AND t.due_date = ? AND t.status = 'pending' ORDER BY t.due_date''', 
+                          (call.from_user.id, tom_str))
+        tasks = cursor.fetchall()
+        if not tasks: return safe_edit(call, f"📅 ЗАВТРА ({format_date(tom_str)})\nНет запланированных работ.")
+        text = f"📅 ЗАВТРА ({format_date(tom_str)})\n\n"
+        for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
+        safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_quick")))
+        
+    elif action == "week":
+        today = datetime.now().date()
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id
+                          WHERE t.user_id = ? AND t.due_date BETWEEN ? AND ? AND t.status = 'pending' ORDER BY t.due_date''', 
+                          (call.from_user.id, monday.strftime("%Y-%m-%d"), sunday.strftime("%Y-%m-%d")))
+        tasks = cursor.fetchall()
+        if not tasks:
+            return safe_edit(call, f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\nНет работ.")
+        text = f"📅 НА НЕДЕЛЕ ({format_date(monday.strftime('%Y-%m-%d'))} - {format_date(sunday.strftime('%Y-%m-%d'))})\n\n"
+        for t in tasks: text += f"{t['emoji']} {t['name']} • {TASK_TYPE_EMOJIS.get(t['task_type'], '📌')} {t['title']} — {format_date(t['due_date'])}\n"
+        safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="menu_quick")))
+        
+    elif action == "overdue":
+        show_overdue_tasks(call.message.chat.id, call.from_user.id)
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
