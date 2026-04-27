@@ -135,8 +135,8 @@ def get_main_keyboard():
         types.InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="menu_stats")
     )
     keyboard.add(
-        types.InlineKeyboardButton("📂 МОИ РАБОТЫ", callback_data="menu_my_tasks"),
-        types.InlineKeyboardButton("⚡ БЫСТРЫЙ ПРОСМОТР", callback_data="menu_quick")
+        types.InlineKeyboardButton("📂 МОИ РАБОТЫ", callback_data="menu_my_tasks"),  # ✅ Заменили ПОМОЩЬ на МОИ РАБОТЫ
+        types.InlineKeyboardButton("⚡ БЫСТРЫЕ ДЕЙСТВИЯ", callback_data="menu_quick")
     )
     return keyboard
 
@@ -274,17 +274,28 @@ def show_overdue_tasks(chat_id, user_id, callback_back="back_to_menu"):
 
 # ========== МЕНЮ И НАВИГАЦИЯ ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
-def menu_router(call):
-    bot.answer_callback_query(call.id)
+def menu_callback(call):
     action = call.data.split("_")[1]
-    if action == "subjects": show_subjects(call)
-    elif action == "add": start_add_flow(call.from_user.id, call.message.chat.id, call)
-    elif action == "calendar": show_calendar_menu(call)
-    elif action == "reminders": show_reminders_menu(call)
-    elif action == "settings": show_settings_menu(call)
-    elif action == "stats": show_statistics(call)
-    elif action == "my_tasks": show_my_tasks_filter(call)
-    elif action == "quick": show_quick_actions(call)
+    if action == "subjects":
+        show_subjects(call)
+    elif action == "add":
+        start_add_flow(call.from_user.id, call.message.chat.id, call)
+    elif action == "calendar":
+        show_calendar_menu(call)
+    elif action == "reminders":
+        show_reminders_menu(call)
+    elif action == "settings":
+        show_settings_menu(call)
+    elif action == "stats":
+        show_statistics(call)
+    elif action == "help":
+        show_help(call)
+    elif action == "quick":
+        show_quick_actions(call)
+    elif action == "my_tasks":   # ✅ ДОБАВЛЕНО
+        show_my_tasks_main(call)
+    
+    bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_menu")
 def back_to_menu(call):
@@ -621,14 +632,17 @@ def show_statistics(call):
         for s in by_subj: r = (s['comp'] / s['total'] * 100) if s['total'] > 0 else 0; text += f"  {s['emoji']} {s['name']}: {r:.0f}% ({s['comp']}/{s['total']})\n"
     safe_edit(call, text, types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu")))
 
-# ========== РАЗДЕЛ 7: МОИ РАБОТЫ (ПОЛНОСТЬЮ ИСПРАВЛЕН) ==========
+# ========== МОИ РАБОТЫ (ПОЛНОСТЬЮ ИСПРАВЛЕН) ==========
+user_actions = {}  # Для хранения состояний (перенос даты и т.д.)
+
 def show_my_tasks_main(call):
     bot.answer_callback_query(call.id)
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📋 ПО ТИПАМ РАБОТ", callback_data="tasks_by_type"))
-    kb.add(types.InlineKeyboardButton("📊 ПО СТАТУСУ (ВЫПОЛНЕННЫ/ПРОСРОЧЕНЫ)", callback_data="tasks_by_status"))
+    kb.add(types.InlineKeyboardButton("📊 ПО СТАТУСУ (ВЫПОЛНЕННЫЕ / ПРОСРОЧЕННЫЕ)", callback_data="tasks_by_status"))
     kb.add(types.InlineKeyboardButton("◀️ НАЗАД", callback_data="back_to_menu"))
-    safe_edit(call, "📂 **МОИ РАБОТЫ**\nВыберите фильтр просмотра:", kb)
+    try: bot.edit_message_text("📂 **МОИ РАБОТЫ**\nВыберите фильтр просмотра:", call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
+    except: bot.send_message(call.message.chat.id, "📂 **МОИ РАБОТЫ**\nВыберите фильтр просмотра:", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data == "tasks_by_type")
 def show_type_filter(call):
@@ -637,7 +651,8 @@ def show_type_filter(call):
     for k, v in TASK_TYPE_EMOJIS.items():
         kb.add(types.InlineKeyboardButton(v, callback_data=f"filter_type_{k}"))
     kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"))
-    safe_edit(call, "📋 **ВЫБЕРИТЕ ТИП РАБОТЫ**", kb)
+    try: bot.edit_message_text("📋 **ВЫБЕРИТЕ ТИП РАБОТЫ**", call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
+    except: bot.send_message(call.message.chat.id, "📋 **ВЫБЕРИТЕ ТИП РАБОТЫ**", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("filter_type_"))
 def filter_tasks_by_type(call):
@@ -647,7 +662,7 @@ def filter_tasks_by_type(call):
                       WHERE t.user_id = ? AND t.task_type = ? AND t.status = 'pending' ORDER BY t.due_date''',
                    (call.from_user.id, task_type))
     tasks = cursor.fetchall()
-    show_task_list(call, tasks, "menu_my_tasks", f"📋 {TASK_TYPE_EMOJIS.get(task_type, '📌')}")
+    show_task_list(call, tasks, f"📋 {TASK_TYPE_EMOJIS.get(task_type, '📌')}", "menu_my_tasks")
 
 @bot.callback_query_handler(func=lambda c: c.data == "tasks_by_status")
 def show_status_filter(call):
@@ -656,7 +671,8 @@ def show_status_filter(call):
     kb.add(types.InlineKeyboardButton("✅ ВЫПОЛНЕННЫЕ", callback_data="filter_status_completed"))
     kb.add(types.InlineKeyboardButton("⚠️ ПРОСРОЧЕННЫЕ", callback_data="filter_status_overdue"))
     kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"))
-    safe_edit(call, "📊 **ВЫБЕРИТЕ СТАТУС**", kb)
+    try: bot.edit_message_text("📊 **ВЫБЕРИТЕ СТАТУС**", call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
+    except: bot.send_message(call.message.chat.id, "📊 **ВЫБЕРИТЕ СТАТУС**", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("filter_status_"))
 def filter_tasks_by_status(call):
@@ -673,44 +689,51 @@ def filter_tasks_by_status(call):
                           WHERE t.user_id = ? AND t.due_date < ? AND t.status = 'pending' ORDER BY t.due_date''',
                        (call.from_user.id, today))
         title = "⚠️ ПРОСРОЧЕННЫЕ"
-    else:
-        return
+    else: return
     tasks = cursor.fetchall()
-    show_task_list(call, tasks, "menu_my_tasks", title)
+    show_task_list(call, tasks, title, "menu_my_tasks")
 
-def show_task_list(call, tasks, back_callback, title):
+def show_task_list(call, tasks, title, back_callback):
+    kb = types.InlineKeyboardMarkup(row_width=1)
     if not tasks:
-        kb = types.InlineKeyboardMarkup(row_width=1)
         kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"),
                types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
-        safe_edit(call, f"{title}\nРабот не найдено.", kb)
+        try: bot.edit_message_text(f"{title}\nРабот не найдено.", call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
+        except: bot.send_message(call.message.chat.id, f"{title}\nРабот не найдено.", reply_markup=kb, parse_mode="Markdown")
         return
 
-    kb = types.InlineKeyboardMarkup(row_width=1)
     for t in tasks:
-        # Формат строго как просили: предмет • название (дата)
-        label = f"{t['emoji']} {t['name']} • {t['title']} ({format_date(t['due_date'])})"
-        kb.add(types.InlineKeyboardButton(label, callback_data=f"my_task_{t['id']}"))
-    kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"),
+        # Формат строго: Предмет • Название (дата)
+        subj = t[12] if len(t) > 12 and t[12] else "Без предмета"
+        emoji = t[13] if len(t) > 13 and t[13] else "📚"
+        label = f"{emoji} {subj} • {t[3]} ({format_date(t[6])})"
+        kb.add(types.InlineKeyboardButton(label, callback_data=f"my_task_{t[0]}"))
+
+    kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data=back_callback),
            types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
-    safe_edit(call, f"{title} ({len(tasks)} работ):", kb)
+    try: bot.edit_message_text(f"{title} ({len(tasks)} работ):", call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
+    except: bot.send_message(call.message.chat.id, f"{title} ({len(tasks)} работ):", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("my_task_"))
 def task_action_menu(call):
     bot.answer_callback_query(call.id)
     task_id = int(call.data.split("_")[2])
-    cursor.execute('''SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id WHERE t.id = ?''', (task_id,))
+    cursor.execute("SELECT t.*, s.name, s.emoji FROM tasks t LEFT JOIN subjects s ON t.subject_id = s.id WHERE t.id = ?", (task_id,))
     t = cursor.fetchone()
     if not t: return bot.answer_callback_query(call.id, "Задача не найдена")
 
     kb = types.InlineKeyboardMarkup(row_width=1)
-    if t['status'] == 'pending':
+    if t[9] == 'pending':  # status index
         kb.add(types.InlineKeyboardButton("✅ ОТМЕТИТЬ ВЫПОЛНЕННОЙ", callback_data=f"task_complete_{task_id}"),
                types.InlineKeyboardButton("📅 ПЕРЕНЕСТИ ДАТУ", callback_data=f"task_postpone_{task_id}"),
                types.InlineKeyboardButton("🗑 УДАЛИТЬ", callback_data=f"task_delete_{task_id}"))
     kb.add(types.InlineKeyboardButton("◀️ В МОИ РАБОТЫ", callback_data="menu_my_tasks"),
            types.InlineKeyboardButton("🏠 В ГЛАВНОЕ МЕНЮ", callback_data="back_to_menu"))
-    safe_edit(call, f"📝 **{t['title']}**\n📚 {t['name']}\n📅 Сдача: {format_date(t['due_date'])}\nСтатус: {t['status']}", kb)
+    
+    subj = t[12] if len(t) > 12 and t[12] else "Предмет"
+    try: bot.edit_message_text(f"📝 **{t[3]}**\n📚 {subj}\n📅 Сдача: {format_date(t[6])}\nСтатус: {t[9]}",
+                               call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="Markdown")
+    except: bot.send_message(call.message.chat.id, f"📝 **{t[3]}**\n📚 {subj}\n📅 Сдача: {format_date(t[6])}\nСтатус: {t[9]}", reply_markup=kb, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("task_complete_"))
 def task_complete(call):
@@ -759,11 +782,6 @@ def process_postpone_date(message, user_id):
         bot.register_next_step_handler(msg, process_postpone_date, user_id)
     finally:
         if user_id in user_actions: del user_actions[user_id]
-
-# Обновляем роутер меню, чтобы menu_my_tasks вызывал новый обработчик
-# (Замените старую строку в menu_router на эту, если она не была обновлена)
-# elif action == "my_tasks": show_my_tasks_main(call)
-
 # ========== РАЗДЕЛ 8: БЫСТРЫЙ ПРОСМОТР ==========
 def show_quick_actions(call):
     bot.answer_callback_query(call.id)
