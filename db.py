@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, AsyncIterator
 
 import aiosqlite
 
@@ -15,7 +16,8 @@ def utc_now() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat()
 
 
-async def connect() -> aiosqlite.Connection:
+@asynccontextmanager
+async def connect() -> AsyncIterator[aiosqlite.Connection]:
     db_path = settings.database_path
     db_dir = os.path.dirname(db_path)
     if db_dir and db_dir not in (".", ""):
@@ -23,10 +25,13 @@ async def connect() -> aiosqlite.Connection:
 
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA foreign_keys=ON;")
-    await db.execute("PRAGMA journal_mode=WAL;")
-    await db.execute("PRAGMA busy_timeout=5000;")
-    return db
+    try:
+        await db.execute("PRAGMA foreign_keys=ON;")
+        await db.execute("PRAGMA journal_mode=WAL;")
+        await db.execute("PRAGMA busy_timeout=5000;")
+        yield db
+    finally:
+        await db.close()
 
 
 async def init_db() -> None:
