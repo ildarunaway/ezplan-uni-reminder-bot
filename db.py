@@ -30,7 +30,7 @@ async def connect() -> aiosqlite.Connection:
 
 
 async def init_db() -> None:
-    async with await connect() as db:
+    async with connect() as db:
         await db.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -102,25 +102,25 @@ async def init_db() -> None:
 
 
 async def fetchone(query: str, params: tuple[Any, ...] = ()) -> aiosqlite.Row | None:
-    async with await connect() as db:
+    async with connect() as db:
         async with db.execute(query, params) as cursor:
             return await cursor.fetchone()
 
 
 async def fetchall(query: str, params: tuple[Any, ...] = ()) -> list[aiosqlite.Row]:
-    async with await connect() as db:
+    async with connect() as db:
         async with db.execute(query, params) as cursor:
             return await cursor.fetchall()
 
 
 async def execute(query: str, params: tuple[Any, ...] = ()) -> int:
-    async with await connect() as db:
+    async with connect() as db:
         cursor = await db.execute(query, params)
         await db.commit()
         return int(cursor.lastrowid or 0)
 
 
 async def execute_many(query: str, seq_of_params: list[tuple[Any, ...]]) -> None:
-    async with await connect() as db:
+    async with connect() as db:
         await db.executemany(query, seq_of_params)
         await db.commit()
