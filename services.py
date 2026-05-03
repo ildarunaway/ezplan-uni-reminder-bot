@@ -216,7 +216,7 @@ async def create_works(user_id: int, subject_id: int, work_type: str, items: lis
     params = []
     for item in items:
         params.append((user_id, subject_id, work_type, item["title"], item["deadline_date"], "active", now, now))
-    async with await connect() as db:
+    async with connect() as db:
         await db.executemany(
             """
             INSERT INTO works (user_id, subject_id, work_type, title, deadline_date, status, created_at, updated_at)
